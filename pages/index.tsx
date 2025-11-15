@@ -1,5 +1,5 @@
 import Head from 'next/head';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 
 export default function Home() {
   const [user, setUser] = useState<string | null>(null);
@@ -10,10 +10,14 @@ export default function Home() {
   const [atRema, setAtRema] = useState(false);
   const [otherUserAtRema, setOtherUserAtRema] = useState(false);
   const [lastMessageCheck, setLastMessageCheck] = useState(0);
+  const [allLocations, setAllLocations] = useState<any[]>([]);
+  const [myLocation, setMyLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const mapRef = useRef<any>(null);
+  const markersRef = useRef<Map<string, any>>(new Map());
 
-  // Rema 1000 Solsiden coordinates
-  const REMA_LAT = 63.4305;
-  const REMA_LNG = 10.3951;
+  // Rema 1000 Solsiden coordinates (CORRECTED!)
+  const REMA_LAT = 63.436466;
+  const REMA_LNG = 10.41653;
   const REMA_RADIUS = 100; // meters
 
   useEffect(() => {
@@ -42,6 +46,45 @@ export default function Home() {
     };
   }, []);
 
+  // Initialize map
+  useEffect(() => {
+    if (!user || typeof window === 'undefined') return;
+
+    // Load Leaflet dynamically
+    const initMap = async () => {
+      // @ts-ignore
+      const L = window.L;
+      if (!L || mapRef.current) return;
+
+      const map = L.map('map').setView([REMA_LAT, REMA_LNG], 15);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors',
+      }).addTo(map);
+
+      // Add Rema marker
+      const remaIcon = L.divIcon({
+        html: '<div style="background: #ed1c24; color: white; padding: 8px; border-radius: 50%; width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; font-weight: bold;">🛒</div>',
+        className: 'rema-marker',
+        iconSize: [40, 40],
+      });
+      L.marker([REMA_LAT, REMA_LNG], { icon: remaIcon })
+        .addTo(map)
+        .bindPopup('Rema 1000 Solsiden');
+
+      // Add circle for radius
+      L.circle([REMA_LAT, REMA_LNG], {
+        color: '#ed1c24',
+        fillColor: '#ed1c24',
+        fillOpacity: 0.1,
+        radius: REMA_RADIUS,
+      }).addTo(map);
+
+      mapRef.current = map;
+    };
+
+    setTimeout(initMap, 500);
+  }, [user]);
+
   useEffect(() => {
     if (!user) return;
 
@@ -49,13 +92,18 @@ export default function Home() {
     const watchId = navigator.geolocation.watchPosition(
       async (position) => {
         const { latitude, longitude } = position.coords;
+        setMyLocation({ lat: latitude, lng: longitude });
+
         const distance = calculateDistance(latitude, longitude, REMA_LAT, REMA_LNG);
         const isAtRema = distance <= REMA_RADIUS;
+
+        console.log('GPS Update:', { latitude, longitude, distance, isAtRema });
 
         if (isAtRema !== atRema) {
           setAtRema(isAtRema);
           if (isAtRema) {
             showNotification(`${user} er nå på Rema 1000 Solsiden!`);
+            alert(`${user} er på Rema! Avstand: ${Math.round(distance)}m`);
           }
         }
 
@@ -66,14 +114,18 @@ export default function Home() {
           body: JSON.stringify({ user, lat: latitude, lng: longitude, atRema: isAtRema }),
         });
       },
-      (error) => console.error('GPS error:', error),
-      { enableHighAccuracy: true, maximumAge: 10000, timeout: 5000 }
+      (error) => {
+        console.error('GPS error:', error);
+        alert('GPS feil: ' + error.message);
+      },
+      { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
     );
 
     // Poll for other user's location
     const locationInterval = setInterval(async () => {
       const response = await fetch('/api/location');
       const locations = await response.json();
+      setAllLocations(locations);
 
       const otherUser = locations.find((loc: any) => loc.user !== user);
       if (otherUser && otherUser.atRema && !otherUserAtRema) {
@@ -82,7 +134,7 @@ export default function Home() {
       } else if (otherUser && !otherUser.atRema) {
         setOtherUserAtRema(false);
       }
-    }, 5000);
+    }, 3000);
 
     // Poll for new messages
     const messageInterval = setInterval(async () => {
@@ -120,6 +172,44 @@ export default function Home() {
         });
     }
   }, [user]);
+
+  // Update map markers
+  useEffect(() => {
+    if (!mapRef.current || typeof window === 'undefined') return;
+    // @ts-ignore
+    const L = window.L;
+    if (!L) return;
+
+    // Update markers for all locations
+    allLocations.forEach((loc) => {
+      const existingMarker = markersRef.current.get(loc.user);
+
+      const isMe = loc.user === user;
+      const color = isMe ? '#4CAF50' : '#2196F3';
+      const emoji = isMe ? '🧑' : '👤';
+
+      const userIcon = L.divIcon({
+        html: `<div style="background: ${color}; color: white; padding: 5px; border-radius: 50%; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; font-size: 18px;">${emoji}</div>`,
+        className: 'user-marker',
+        iconSize: [30, 30],
+      });
+
+      if (existingMarker) {
+        existingMarker.setLatLng([loc.lat, loc.lng]);
+        existingMarker.setIcon(userIcon);
+      } else {
+        const marker = L.marker([loc.lat, loc.lng], { icon: userIcon })
+          .addTo(mapRef.current)
+          .bindPopup(loc.user);
+        markersRef.current.set(loc.user, marker);
+      }
+    });
+
+    // Center map on my location if available
+    if (myLocation && mapRef.current) {
+      mapRef.current.setView([myLocation.lat, myLocation.lng], mapRef.current.getZoom());
+    }
+  }, [allLocations, myLocation, user]);
 
   const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
     const R = 6371e3; // Earth radius in meters
@@ -177,6 +267,21 @@ export default function Home() {
     setNewMessage('');
   };
 
+  const handleLogout = () => {
+    localStorage.removeItem('remaUser');
+    setUser(null);
+    setMessages([]);
+    setAtRema(false);
+    setOtherUserAtRema(false);
+    setAllLocations([]);
+    setMyLocation(null);
+    if (mapRef.current) {
+      mapRef.current.remove();
+      mapRef.current = null;
+    }
+    markersRef.current.clear();
+  };
+
   if (!user) {
     return (
       <>
@@ -207,11 +312,27 @@ export default function Home() {
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <link rel="manifest" href="/manifest.json" />
         <meta name="theme-color" content="#ed1c24" />
+        <link
+          rel="stylesheet"
+          href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+          crossOrigin=""
+        />
+        <script
+          src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+          crossOrigin=""
+        ></script>
       </Head>
       <div style={styles.container}>
         <div style={styles.header}>
           <h1 style={styles.title}>Rema Tracker</h1>
-          <p style={styles.userText}>Logget inn som: {user}</p>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <p style={styles.userText}>Logget inn som: {user}</p>
+            <button style={styles.logoutButton} onClick={handleLogout}>
+              Logg ut
+            </button>
+          </div>
         </div>
 
         {showInstall && (
@@ -227,7 +348,16 @@ export default function Home() {
               {user === 'Tomas' ? 'Catrine' : 'Tomas'} er på Rema! 🛒
             </p>
           )}
+          {myLocation && (
+            <p style={styles.debugInfo}>
+              Din posisjon: {myLocation.lat.toFixed(5)}, {myLocation.lng.toFixed(5)}
+              {' | Avstand til Rema: '}
+              {Math.round(calculateDistance(myLocation.lat, myLocation.lng, REMA_LAT, REMA_LNG))}m
+            </p>
+          )}
         </div>
+
+        <div id="map" style={styles.map}></div>
 
         <div style={styles.chatContainer}>
           <h2 style={styles.chatTitle}>Meldinger</h2>
@@ -289,6 +419,32 @@ const styles = {
   userText: {
     fontSize: '14px',
     color: '#666',
+    margin: 0,
+  } as React.CSSProperties,
+  logoutButton: {
+    padding: '8px 16px',
+    fontSize: '14px',
+    backgroundColor: '#666',
+    color: 'white',
+    border: 'none',
+    borderRadius: '6px',
+    cursor: 'pointer',
+  } as React.CSSProperties,
+  debugInfo: {
+    fontSize: '12px',
+    color: '#666',
+    backgroundColor: '#fff',
+    padding: '8px',
+    borderRadius: '4px',
+    marginTop: '10px',
+    fontFamily: 'monospace',
+  } as React.CSSProperties,
+  map: {
+    width: '100%',
+    height: '300px',
+    borderRadius: '8px',
+    marginBottom: '20px',
+    border: '2px solid #ed1c24',
   } as React.CSSProperties,
   button: {
     display: 'block',
