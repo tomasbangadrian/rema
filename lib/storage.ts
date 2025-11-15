@@ -16,10 +16,16 @@ export interface Message {
   timestamp: number;
 }
 
+export interface PushSubscription {
+  user: string;
+  subscription: any;
+}
+
 class InMemoryStorage {
   private locations: Map<string, Location> = new Map();
   private messages: Message[] = [];
   private messageIdCounter = 0;
+  private pushSubscriptions: Map<string, any> = new Map();
 
   // Location methods
   updateLocation(user: string, lat: number, lng: number, atRema: boolean) {
@@ -67,6 +73,24 @@ class InMemoryStorage {
 
   getRecentMessages(limit: number = 50): Message[] {
     return this.messages.slice(-limit);
+  }
+
+  // Push subscription methods
+  savePushSubscription(user: string, subscription: any) {
+    this.pushSubscriptions.set(user, subscription);
+    console.log(`Saved push subscription for ${user}`);
+  }
+
+  getPushSubscription(user: string): any | undefined {
+    return this.pushSubscriptions.get(user);
+  }
+
+  getAllPushSubscriptions(): Map<string, any> {
+    return this.pushSubscriptions;
+  }
+
+  removePushSubscription(user: string) {
+    this.pushSubscriptions.delete(user);
   }
 }
 

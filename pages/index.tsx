@@ -20,11 +20,74 @@ export default function Home() {
   const REMA_LNG = 10.41653;
   const REMA_RADIUS = 100; // meters
 
+  // Helper function for push subscription
+  const urlBase64ToUint8Array = (base64String: string) => {
+    const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+    const base64 = (base64String + padding).replace(/\-/g, '+').replace(/_/g, '/');
+    const rawData = window.atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+    for (let i = 0; i < rawData.length; ++i) {
+      outputArray[i] = rawData.charCodeAt(i);
+    }
+    return outputArray;
+  };
+
+  const subscribeToPush = async (userName: string) => {
+    try {
+      // Check if service worker is supported
+      if (!('serviceWorker' in navigator)) {
+        console.log('Service Worker not supported');
+        return;
+      }
+
+      if (!('PushManager' in window)) {
+        console.log('Push notifications not supported');
+        return;
+      }
+
+      // Request notification permission
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') {
+        console.log('Notification permission denied');
+        return;
+      }
+
+      // Get service worker registration
+      const registration = await navigator.serviceWorker.ready;
+
+      // Subscribe to push notifications
+      const vapidPublicKey = 'BEl62iUYgUivxIkv69yViEuiBIa-Ib9-SkvMeAtA3LFgDjrwCh0l52wWJN9RCa5LcYYhYt7VKL9p0PcHkCqJq8A';
+
+      const subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
+      });
+
+      console.log('Push subscription created:', subscription);
+
+      // Send subscription to server
+      await fetch('/api/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user: userName,
+          subscription: subscription.toJSON(),
+        }),
+      });
+
+      console.log('Push subscription saved to server');
+    } catch (error) {
+      console.error('Error subscribing to push:', error);
+    }
+  };
+
   useEffect(() => {
     // Check if user is logged in
     const savedUser = localStorage.getItem('remaUser');
     if (savedUser) {
       setUser(savedUser);
+      // Re-subscribe to push notifications on reload
+      setTimeout(() => subscribeToPush(savedUser), 1000);
     }
 
     // PWA install prompt
@@ -232,14 +295,12 @@ export default function Home() {
     }
   };
 
-  const handleLogin = (name: string) => {
+  const handleLogin = async (name: string) => {
     localStorage.setItem('remaUser', name);
     setUser(name);
 
-    // Request notification permission
-    if ('Notification' in window && Notification.permission === 'default') {
-      Notification.requestPermission();
-    }
+    // Subscribe to push notifications
+    await subscribeToPush(name);
   };
 
   const handleInstall = async () => {
